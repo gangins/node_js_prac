@@ -6,7 +6,7 @@ const cookieParser = require('cookie-parser')
 
 const config = require('./config/key')
 const {User} = require('./models/User')
-
+const {auth} = require('./middleware/auth')
 app.use(bodyParser.urlencoded({ extended: true }))
 app.use(bodyParser.json())
 app.use(cookieParser())
@@ -28,7 +28,7 @@ app.get('/', (req, res) => {
   res.send('Hello World!')
 })
 
-app.post('/register', async (req, res) => {
+app.post('/api/users/register', async (req, res) => {
   const user = new User(req.body);
 
   try {
@@ -40,32 +40,61 @@ app.post('/register', async (req, res) => {
     res.json({ success: false, err });
   }
 });
-app.post('/login',(req, res) =>{
-  // 요청된 이메일을 데이터베이스 찾기
-  User.findOne({email: req.body.email})
-  .then(docs=>{
-      if(!docs){
+app.post('/api/users/login', async (req, res) => {
+  try {
+      const user = await User.findOne({ email: req.body.email });
+      if (!user) {
           return res.json({
               loginSuccess: false,
-              messsage: "제공된 이메일에 해당하는 유저가 없습니다."
-          })
+              message: "제공된 이메일에 해당하는 유저가 없습니다."
+          });
       }
-      docs.comparePassword(req.body.password, (err, isMatch) => {
-          if(!isMatch) return res.json({loginSuccess: false, messsage: "비밀번호가 틀렸습니다."})
-  // Password가 일치하다면 토큰 생성
-          docs.generateToken((err, user)=>{
-              if(err) return res.status(400).send(err);
-              // 토큰을 저장
-              res.cookie("x_auth", user.token)
-              .status(200)
-              .json({loginSuccess: true, userId: user._id})
-          })
+
+      user.comparePassword(req.body.password, async (err, isMatch) => {
+          if (err) return res.status(400).send(err);
+          if (!isMatch) {
+              return res.json({ loginSuccess: false, message: "비밀번호가 틀렸습니다." });
+          }
+
+          try {
+              const tokenUser = await user.generateToken();
+              res.cookie("x_auth", tokenUser.token)
+                 .status(200)
+                 .json({ loginSuccess: true, userId: user._id });
+          } catch (error) {
+              res.status(400).send(error);
+          }
+      });
+  } catch (error) {
+      res.status(500).json({ success: false, error });
+  }
+});
+
+app.get('/api/users/auth', auth, (req, res) => {
+  // 여기까지 미들웨어를 통과해 왔다는 것은 Authentication 이 True 라는 것
+  res.status(200).json({
+      _id: req.user._id,
+      isAdmin: req.user.role !== 0,
+      isAuth: true,
+      email: req.user.email,
+      name: req.user.name,
+      lastname: req.user.lastname,
+      role: req.user.role,
+      image: req.user.image
+  });
+});
+// auth 미들웨어를 사용하는 이유는 req.user 데이터를 사용하기 위함
+app.get('/api/users/logout', auth, (req, res) => {
+  User.findOneAndUpdate({ _id: req.user._id }, { token: "" })
+      .then(user => {
+          if (!user) return res.json({ success: false, error: "User not found" });
+          return res.status(200).send({ success: true });
       })
-  })
-  .catch((err)=>{
-      return res.status(400).send(err);
-  })
-})
+      .catch(err => {
+          return res.json({ success: false, err });
+      });
+});
+
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`)
